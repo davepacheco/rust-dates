@@ -1,32 +1,44 @@
-use chrono::{DateTime, Duration, FixedOffset, Local, TimeZone, Utc};
-use clap::Parser;
-use std::str::FromStr;
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-/// Parse and format timestamps, offsets, and deltas
-#[derive(Parser, Debug)]
-#[command(author, version, about)]
-struct Args {
-    #[arg()]
-    values: Vec<String>,
-}
+use anyhow::{Context, bail};
+use chrono::{
+    DateTime, Duration, Local, NaiveDate, SecondsFormat, TimeZone, Utc,
+};
+
+const USAGE: &str = r#"
+usage: dates              # prints current time (in several forms)
+       dates TIME         # prints time TIME (in several forms)
+       dates [+-]DELTA    # prints current time offset by DELTA
+       dates T1 T2        # prints T1, T2, and the delta between them
+       dates T1 [+-]DELTA # prints T1, DELTA, and T2 = T1 + DELTA
+"#;
 
 fn main() {
-    let args = Args::parse();
-
-    match args.values.len() {
-        0 => print_now(),
-        1 => handle_single(&args.values[0]),
-        2 => handle_two(&args.values[0], &args.values[1]),
-        _ => eprintln!("Too many arguments"),
+    if let Err(error) = doit() {
+        eprintln!("dates: {:#}", error);
+        eprintln!("{USAGE}");
+        std::process::exit(2);
     }
 }
 
-fn print_now() {
-    let now = Utc::now();
-    print_time("now", now);
+fn doit() -> anyhow::Result<()> {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+
+    match args.len() {
+        0 => print_time("now", Utc::now()),
+        1 => handle_one(&args[0])?,
+        2 => handle_two(&args[0], &args[1])?,
+        _ => {
+            bail!("too many arguments");
+        }
+    }
+
+    Ok(())
 }
 
-fn handle_single(arg: &str) {
+fn handle_one(arg: &str) -> anyhow::Result<()> {
     if let Ok(delta) = parse_delta(arg) {
         let now = Utc::now();
         let then = now + delta;
@@ -36,23 +48,27 @@ fn handle_single(arg: &str) {
     } else if let Ok(time) = parse_time(arg) {
         print_time("time", time);
     } else {
-        eprintln!("Could not parse input: {}", arg);
+        bail!("Could not parse {arg:?} as either a time or a delta");
     }
+    Ok(())
 }
 
-fn handle_two(a: &str, b: &str) {
-    if let (Ok(t1), Ok(t2)) = (parse_time(a), parse_time(b)) {
+fn handle_two(a: &str, b: &str) -> anyhow::Result<()> {
+    let t1 =
+        parse_time(a).with_context(|| format!("parsing {a:?} as a time"))?;
+    if let Ok(t2) = parse_time(b) {
         print_time("time 1", t1);
         print_time("time 2", t2);
         print_delta("delta", t2 - t1);
-    } else if let (Ok(t1), Ok(d)) = (parse_time(a), parse_delta(b)) {
+    } else if let Ok(d) = parse_delta(b) {
         let t2 = t1 + d;
         print_time("time 1", t1);
         print_delta("delta", d);
         print_time("time 2", t2);
     } else {
-        eprintln!("Could not parse inputs: {} {}", a, b);
+        bail!("Could not parse {b:?} as either a time or a delta");
     }
+    Ok(())
 }
 
 fn parse_time(s: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
@@ -68,8 +84,12 @@ fn parse_time(s: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
 
     // Try parsing with chrono
     let dt = DateTime::parse_from_rfc3339(s)
-        .or_else(|_| DateTime::parse_from_str(s, "%Y-%m-%d"))
-        .or_else(|_| DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.3f%z"))?;
+        .or_else(|_| DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.3f%z"))
+        .map(|n| n.to_utc())
+        .or_else(|_| {
+            NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .map(|n| n.and_hms_opt(0, 0, 0).unwrap().and_utc())
+        })?;
     Ok(dt.with_timezone(&Utc))
 }
 
@@ -104,40 +124,20 @@ fn parse_delta(s: &str) -> Result<Duration, ()> {
     Ok(Duration::milliseconds((sign as f64 * seconds * 1000.0) as i64))
 }
 
-// fn print_time(label: &str, dt: DateTime<Utc>) {
-//     let timestamp = dt.timestamp() as f64 + (dt.timestamp_subsec_micros() as f64 / 1_000_000.0);
-//     println!("{:<8} {:>14.3} s = {}", label, timestamp, dt.with_timezone(&Local));
-//     println!("         {:>14.3} s = {}", timestamp, dt.to_rfc3339());
-// }
-// 
-// fn print_delta(label: &str, delta: Duration) {
-//     let secs = delta.num_seconds();
-//     let ms = delta.num_milliseconds() - secs * 1000;
-//     let sign = if delta < Duration::zero() { "-" } else { " " };
-// 
-//     let total_secs = delta.num_milliseconds() as f64 / 1000.0;
-//     let d = secs / 86400;
-//     let h = (secs % 86400) / 3600;
-//     let m = (secs % 3600) / 60;
-//     let s = secs % 60;
-// 
-//     println!(
-//         "{:<8} {:>14.3} s = {}{}d {:02}h {:02}m {:02}.{:03}s",
-//         label,
-//         total_secs,
-//         sign,
-//         d.abs(),
-//         h.abs(),
-//         m.abs(),
-//         s.abs(),
-//         ms.abs()
-//     );
-// }
-
 fn print_time(label: &str, dt: DateTime<Utc>) {
-    let timestamp = dt.timestamp() as f64 + (dt.timestamp_subsec_micros() as f64 / 1_000_000.0);
-    println!("{:<8} {:>20.6} s = {}", label, timestamp, dt.with_timezone(&Local));
-    println!("         {:>20.6} s = {}", timestamp, dt.to_rfc3339());
+    let timestamp = dt.timestamp() as f64
+        + (dt.timestamp_subsec_micros() as f64 / 1_000_000.0);
+    println!(
+        "{:<8} {:>20.6} s = {}",
+        label,
+        timestamp,
+        dt.with_timezone(&Local).to_rfc3339_opts(SecondsFormat::Micros, true),
+    );
+    println!(
+        "         {:>20.6}   = {}",
+        "",
+        dt.to_rfc3339_opts(SecondsFormat::Micros, true)
+    );
 }
 
 fn print_delta(label: &str, delta: Duration) {
@@ -156,13 +156,6 @@ fn print_delta(label: &str, delta: Duration) {
 
     println!(
         "{:<8} {:>20.6} s = {}{}d {:02}h {:02}m {:02}.{:06}s",
-        label,
-        total_secs,
-        sign,
-        d,
-        h,
-        m,
-        s,
-        micros
+        label, total_secs, sign, d, h, m, s, micros
     );
 }

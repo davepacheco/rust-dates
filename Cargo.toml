@@ -3,10 +3,11 @@ name = "dates-tool"
 version = "0.1.0"
 edition = "2024"
 description = "command-line tool for working with timestamps and deltas (ported by ChatGPT from https://github.com/davepacheco/dates)"
+license = "MPL-2.0"
 
 [dependencies]
+anyhow = "1.0.97"
 chrono = { version = "0.4", features = ["serde", "clock"] }
-clap = { version = "4", features = ["derive"] }
 
 [[bin]]
 name = "dates"
