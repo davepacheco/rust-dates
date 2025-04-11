@@ -2,7 +2,7 @@
 name = "dates-tool"
 version = "0.1.0"
 edition = "2024"
-description = "command-line tool for working with timestamps and deltas (ported by ChatGPT from https://github.com/davepacheco/dates)"
+description = "command-line tool for working with timestamps and deltas"
 license = "MPL-2.0"
 
 [dependencies]
